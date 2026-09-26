@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 寻渊品牌色：墨绿 -->
+    <color name="ink_green">#FF2D5A4E</color>
+    <color name="ink_green_dark">#FF1A3D34</color>
+    <!-- 米白背景 -->
+    <color name="rice_paper">#FFF5F0E8</color>
+    <!-- 启动页背景 -->
+    <color name="splash_background">#FFF5F0E8</color>
+    <color name="splash_background_dark">#FF1A1A1A</color>
+    <color name="ic_launcher_background">#0062CC</color>
+</resources>
