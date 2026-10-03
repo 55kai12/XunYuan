@@ -65,3 +65,6 @@ local.properties
 # 内部审查与工作文档（不进入公开仓库）
 /寻渊-代码检查报告.md
 /寻渊-代码检查报告-*.md
+
+# gh CLI 等在仓库内落下的本机状态（device-id 等）
+/.local/

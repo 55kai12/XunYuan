@@ -88,6 +88,22 @@ flutter build apk --release --split-per-abi --target-platform android-arm64,andr
 
 release 签名读取 `android/key.properties`（**不在版本控制中**），该文件缺失时自动回退 debug 签名。
 
+### 图标设计脚本
+
+`icon_design/` 下保留了生成启动图标与商店素材的脚本，路径均基于脚本自身位置（`os.path.dirname(__file__)`）推导，
+**克隆到任意目录都能直接跑**，无需改路径：
+
+```bash
+cd icon_design
+python apply_icon.py         # 生成并写入自适应图标（前景/单色/旧版 mipmap）
+python make_store_assets.py  # 生成 docs/icon-512.png 与 feature-graphic.png
+```
+
+- 输入源：`fg_green_bg.png`、`fg_cream_bg.png`、`mono.png`（432×432 母版）
+- 成品参照：`icon_final.png`
+- 其余脚本（`make_*.py`）为各变体的生成器，会在本目录产出 `preview_*.png` 预览图
+  （预览稿与一次性探索稿不入库，见 `.gitignore`）
+
 ## 技术栈
 
 - Flutter 3.24.x + Dart 3.5
