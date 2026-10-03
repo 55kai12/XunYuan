@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/constants/app_constants.dart';
 import 'core/i18n/i18n.dart';
 import 'core/theme/app_theme.dart';
+import 'core/theme/text_scale.dart';
 import 'core/router/app_router.dart';
 import 'core/settings/settings_providers.dart';
 import 'core/settings/settings_service.dart';
@@ -82,11 +83,15 @@ class XunYuanApp extends ConsumerWidget {
       ],
 
       // 隐私锁：启用时在应用外层包裹锁屏
+      // 字号上限：跟随系统但封顶 1.6x（见 limitTextScale）
+      //
+      // 顺序有讲究：字号上限必须包在**最外层**。锁屏是整棵子树的兄弟而非后代
+      // —— 未解锁时它根本不渲染 child，只画自己那套 UI。若把上限包在内层，
+      // 锁屏自己的文字就落在约束之外，2.0x 时 80×80 图标框里的「渊」会被撑破。
       builder: (context, child) {
-        if (privacyLockEnabled) {
-          return LockScreen(child: child!);
-        }
-        return child!;
+        final content =
+            privacyLockEnabled ? LockScreen(child: child!) : child!;
+        return limitTextScale(context, content);
       },
     );
   }

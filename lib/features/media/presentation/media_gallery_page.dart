@@ -105,6 +105,19 @@ class _MediaGalleryPageState extends ConsumerState<MediaGalleryPage> {
         return FutureBuilder<List<MediaTableData>>(
           future: _loadAllMedia(families.map((f) => f.id).toList()),
           builder: (context, snapshot) {
+            // 必须先判 error：只判 !hasData 会让 future 抛错时永远转圈
+            if (snapshot.hasError) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    '相册加载失败：${snapshot.error}'.tr,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: AppColors.error),
+                  ),
+                ),
+              );
+            }
             if (!snapshot.hasData) {
               return const Center(child: CircularProgressIndicator());
             }

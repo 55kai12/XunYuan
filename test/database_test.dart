@@ -2,12 +2,16 @@
 /// 验证家族 CRUD、统计、级联删除；成员 CRUD、搜索、级联删除
 library;
 
+import 'dart:io';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 import 'package:familytree/core/database/database.dart';
 import 'package:familytree/features/family/data/family_repository.dart';
+import 'package:familytree/features/media/data/media_repository.dart';
 import 'package:familytree/features/person/data/person_repository.dart';
 import 'package:familytree/features/relationship/data/relationship_repository.dart';
 import 'package:familytree/features/event/data/event_repository.dart';
@@ -440,10 +444,26 @@ void main() {
         treeId: treeId, fromPersonId: child1Id, toPersonId: grandchildId, type: RelationType.father);
 
     final tree = await relRepo.buildDescendantTree(rootPersonId: rootId);
-    expect(tree.person.id, rootId);
+    expect(tree, isNotNull);
+    expect(tree!.person.id, rootId);
     expect(tree.children.length, 2);
     expect(tree.children.first.children.length, 1);
     expect(tree.children.first.children.first.person.id, grandchildId);
+  });
+
+  // 回归：根成员被删除后仍把它设为中心人物，早先 buildDescendantTree 里
+  // 的 `person!` 会直接空值崩溃；现在应返回 null 由界面兜底。
+  test('根成员已删除时 buildDescendantTree 返回 null 而不是崩溃', () async {
+    final treeId = await repo.insert(name: '测试家族', surname: '朱');
+    final personRepo = PersonRepository(db);
+    final relRepo = RelationshipRepository(db);
+
+    final rootId = await personRepo.insert(
+        treeId: treeId, surname: '朱', givenName: '根', gender: Gender.male);
+    await personRepo.delete(rootId);
+
+    final tree = await relRepo.buildDescendantTree(rootPersonId: rootId);
+    expect(tree, isNull);
   });
 
   test('删除关系不影响成员', () async {
@@ -555,6 +575,35 @@ void main() {
     expect(event.place, '南京');
   });
 
+  // 回归：编辑页的「关联成员」下拉在编辑态可改，但 update() 早先没有
+  // personId 参数 ⇒ 改了成员、提示「已保存」，实际没落库（静默丢改动）。
+  test('更新事件可更换关联成员', () async {
+    final treeId = await repo.insert(name: '测试家族', surname: '徐');
+    final personRepo = PersonRepository(db);
+    final eventRepo = EventRepository(db);
+
+    final firstId = await personRepo.insert(
+        treeId: treeId, surname: '徐', givenName: '一', gender: Gender.male);
+    final secondId = await personRepo.insert(
+        treeId: treeId, surname: '徐', givenName: '二', gender: Gender.male);
+    final eventId = await eventRepo.insert(
+      treeId: treeId,
+      personId: firstId,
+      type: EventType.migration,
+      title: '迁居南方',
+    );
+
+    final updated = await eventRepo.update(id: eventId, personId: secondId);
+    expect(updated, true);
+
+    final event = await eventRepo.getById(eventId);
+    expect(event!.personId, secondId);
+    // 未传 personId 时不应把关联成员清空
+    await eventRepo.update(id: eventId, title: '仍挂原成员');
+    final after = await eventRepo.getById(eventId);
+    expect(after!.personId, secondId);
+  });
+
   test('删除成员级联删除事件', () async {
     final treeId = await repo.insert(name: '测试家族', surname: '何');
     final personRepo = PersonRepository(db);
@@ -573,6 +622,72 @@ void main() {
     // 事件被级联删除
     final events = await eventRepo.watchByPerson(personId).first;
     expect(events, isEmpty);
+  });
+
+  test('删除成员级联删除其媒体记录与头像（不留孤儿文件）', () async {
+    final treeId = await repo.insert(name: '测试家族', surname: '贾');
+    final personRepo = PersonRepository(db);
+    final mediaRepo = MediaRepository(db);
+
+    final personId = await personRepo.insert(
+        treeId: treeId, surname: '贾', givenName: '一', gender: Gender.male);
+
+    // 造两个真实存在的头像文件 + media 记录：
+    //   ① 作为 persons.avatarMediaId 引用（外键指向 media）
+    //   ② 仅以 personId 直挂该成员
+    final dir = await Directory.systemTemp.createTemp('xunyuan_media_');
+    final avatarFile = File(p.join(dir.path, 'avatar_1.jpg'))
+      ..writeAsBytesSync([1, 2, 3]);
+    final extraFile = File(p.join(dir.path, 'extra_1.jpg'))
+      ..writeAsBytesSync([4, 5, 6]);
+
+    final avatarId = await db.into(db.mediaTable).insert(
+          MediaTableCompanion.insert(
+            treeId: Value(treeId),
+            personId: Value(personId),
+            type: MediaKind.image,
+            path: avatarFile.path,
+            createdAt: DateTime.now(),
+          ),
+        );
+    final extraId = await db.into(db.mediaTable).insert(
+          MediaTableCompanion.insert(
+            treeId: Value(treeId),
+            personId: Value(personId),
+            type: MediaKind.image,
+            path: extraFile.path,
+            createdAt: DateTime.now(),
+          ),
+        );
+    // 把 avatar 挂到成员上（这一步就是外键来源）
+    await personRepo.update(
+      id: personId,
+      treeId: treeId,
+      surname: '贾',
+      givenName: '一',
+      gender: Gender.male,
+      avatarMediaId: avatarId,
+    );
+
+    // 前置校验
+    expect(await mediaRepo.getById(avatarId), isNotNull);
+    expect(await mediaRepo.getById(extraId), isNotNull);
+    expect(avatarFile.existsSync(), isTrue);
+
+    // 删除成员：不应抛外键异常，且媒体记录与文件一并清理
+    await personRepo.delete(personId);
+
+    expect(await personRepo.getById(personId), isNull);
+    expect(await mediaRepo.getById(avatarId), isNull);
+    expect(await mediaRepo.getById(extraId), isNull);
+    expect(avatarFile.existsSync(), isFalse);
+    expect(extraFile.existsSync(), isFalse);
+
+    // 家族相册里不应再看到已删成员的媒体
+    expect(await mediaRepo.watchMediaByTree(treeId).first, isEmpty);
+    expect(await mediaRepo.countByTree(treeId), 0);
+
+    await dir.delete(recursive: true);
   });
 
   test('删除事件不影响成员', () async {

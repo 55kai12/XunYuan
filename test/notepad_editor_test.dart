@@ -101,4 +101,43 @@ void main() {
       await pending; // 不应抛 setState after dispose
     });
   });
+
+  // 回归：删图曾经立刻删磁盘文件，用户删完点「取消」会弄丢
+  // 仍被已保存内容引用的图片。现在删图只登记，保存成功后才落地。
+  group('图片惰性删除', () {
+    test('删除图片块只登记待删，不立即动盘', () async {
+      final c = NotepadController('前[img:keep.jpg]后');
+      await c.removeImage(c.blocks[1]);
+      expect(c.pendingDeletions, contains('keep.jpg'));
+      c.dispose();
+    });
+
+    test('放弃登记后待删集合为空（模拟用户取消）', () async {
+      final c = NotepadController('前[img:a.jpg]中[img:b.jpg]后');
+      await c.removeImage(c.blocks[1]);
+      expect(c.pendingDeletions, isNotEmpty);
+      c.discardPendingDeletions();
+      expect(c.pendingDeletions, isEmpty);
+      c.dispose();
+    });
+
+    test('重新载入会清空上一次的待删登记', () async {
+      final c = NotepadController('前[img:old.jpg]后');
+      await c.removeImage(c.blocks[1]);
+      expect(c.pendingDeletions, contains('old.jpg'));
+      c.load('全新内容');
+      expect(c.pendingDeletions, isEmpty);
+      c.dispose();
+    });
+
+    test('同一张图删两次只登记一条', () async {
+      final c = NotepadController('前[img:dup.jpg]后[img:dup.jpg]尾');
+      await c.removeImage(c.blocks[1]);
+      // 第二张同名图此时索引已变
+      final second = c.blocks.firstWhere((b) => b.isImage);
+      await c.removeImage(second);
+      expect(c.pendingDeletions, hasLength(1));
+      c.dispose();
+    });
+  });
 }

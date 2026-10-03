@@ -3,7 +3,7 @@ description: "寻渊 - 本地优先的中文族谱/家谱工具，寻根问祖�
 publish_to: 'none'
 
 # 版本号：每次交付 APK 时自动增加 0.0.1
-version: 0.3.39+51
+version: 0.3.50+62
 
 environment:
   sdk: ^3.5.4

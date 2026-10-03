@@ -17,10 +17,13 @@ bool _ranThisSession = false;
 
 /// 检查并按需执行自动备份；在 App 根组件首帧后调用一次即可
 Future<void> maybeRunAutoBackup(WidgetRef ref) async {
+  // 先读开关再打会话标记：旧顺序（先置 _ranThisSession = true 再读开关）
+  // 会让「启动时开关是关的、用户进设置打开开关」这一轮被永久跳过，
+  // 必须等下次冷启动才生效 —— 用户看到的是「开了没反应」。
+  if (!ref.read(autoBackupProvider)) return;
   if (_ranThisSession) return;
   _ranThisSession = true;
   try {
-    if (!ref.read(autoBackupProvider)) return;
     final service = ref.read(settingsServiceProvider);
     final last = service.lastAutoBackupAt;
     if (last != null && DateTime.now().difference(last) < _autoBackupInterval) {

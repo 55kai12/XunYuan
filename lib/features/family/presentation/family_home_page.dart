@@ -484,7 +484,7 @@ class _StatsSection extends ConsumerWidget {
                   ],
                 ),
                 const SizedBox(height: 16),
-                // 性别比例条
+                // 比例条：total 为 0 时不渲染（避免 0/0 得 NaN 导致进度条断言失败）
                 if (stats.total > 0) ...[
                   Row(
                     children: [

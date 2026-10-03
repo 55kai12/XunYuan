@@ -78,6 +78,9 @@ class BackupService {
         .replaceAll('.', '-');
     final fileName = customName ?? 'xunyuan_backup_$timestamp';
     final file = File(p.join(backupDir.path, '$fileName.zip'));
+    // 先写临时文件再原子重命名：避免打包中途崩溃/断电留下半截 zip，
+    // 让用户以为备份成功却无法恢复（listBackups 会把它当正常备份列出）。
+    final tmpFile = File('${file.path}.tmp');
 
     final encoder = ZipEncoder();
     final archive = Archive();
@@ -113,7 +116,12 @@ class BackupService {
       included.add(base);
     }
 
-    await file.writeAsBytes(encoder.encode(archive)!, flush: true);
+    await tmpFile.writeAsBytes(encoder.encode(archive)!, flush: true);
+    // 原子落地：先删掉同名旧文件（Windows 上 rename 目标已存在会报错）
+    if (await file.exists()) {
+      await file.delete();
+    }
+    await tmpFile.rename(file.path);
     return file.path;
   }
 
@@ -122,6 +130,14 @@ class BackupService {
     final docsDir = await _docsDir();
     final backupDir = Directory(p.join(docsDir.path, 'backups'));
     if (!await backupDir.exists()) return [];
+    // 顺手清掉历史遗留的半截临时文件（打包中途被杀会留下 .tmp）
+    for (final f in backupDir.listSync().whereType<File>()) {
+      if (f.path.endsWith('.tmp')) {
+        try {
+          f.deleteSync();
+        } catch (_) {}
+      }
+    }
     final files = backupDir
         .listSync()
         .whereType<File>()
@@ -178,14 +194,20 @@ class BackupService {
             // 文件删除失败不阻塞恢复
           }
         }
-        // 清空所有表（按依赖顺序反向删除）
+        // 清空所有表。删除顺序必须满足两条：
+        //  ① 引用了 `media` 的表（persons.avatarMediaId 有外键）要先于 media 删除，
+        //     否则删 media 时撞 FK 787；
+        //  ② 引用了 persons / familyTrees 的表（events / relationships / sources）
+        //     要先于 persons / familyTrees 删除。
+        // 合成一条满足两者的顺序：sources → events → relationships → persons
+        //   → familyTrees → media → places。
         await _db.delete(_db.sources).go();
-        await _db.delete(_db.mediaTable).go();
         await _db.delete(_db.events).go();
         await _db.delete(_db.relationships).go();
         await _db.delete(_db.persons).go();
-        await _db.delete(_db.places).go();
         await _db.delete(_db.familyTrees).go();
+        await _db.delete(_db.mediaTable).go();
+        await _db.delete(_db.places).go();
       }
 
       // 按依赖顺序恢复：地点 → 家族 → 成员 → 关系/事件/媒体/资料
@@ -212,19 +234,16 @@ class BackupService {
                 origin: Value(row['origin'] as String?),
                 generationWords: Value(row['generationWords'] as String?),
                 description: Value(row['description'] as String?),
-                coverMediaId: merge
-                    ? const Value.absent()
-                    : Value(row['coverMediaId'] as int?),
+                // 封面引用同理：先留空，等媒体表插完再回填。
+                coverMediaId: const Value.absent(),
                 createdAt: _parseDate(row['createdAt']) ?? DateTime.now(),
                 updatedAt: _parseDate(row['updatedAt']) ?? DateTime.now(),
               ),
               mode: merge ? InsertMode.insert : InsertMode.insertOrReplace,
             );
-        if (merge) {
-          treeIdMap[row['id'] as int] = newId;
-          final cover = row['coverMediaId'] as int?;
-          if (cover != null) pendingCover[newId] = cover;
-        }
+        treeIdMap[row['id'] as int] = newId;
+        final cover = row['coverMediaId'] as int?;
+        if (cover != null) pendingCover[newId] = cover;
         stats = stats.copyWith(families: stats.families + 1);
       }
 
@@ -255,15 +274,15 @@ class BackupService {
                 occupation: Value(row['occupation'] as String?),
                 title: Value(row['title'] as String?),
                 biography: Value(row['biography'] as String?),
-                avatarMediaId:
-                    merge ? const Value.absent() : Value(oldAvatar),
+                // 头像引用一律先留空，等媒体表插完再回填。
+                // 媒体表在成员表之后插入，这里直接写旧 ID 会撞外键约束
+                // （清空模式下媒体记录已被删光；merge 模式下 ID 已重映射）。
+                avatarMediaId: const Value.absent(),
               ),
               mode: merge ? InsertMode.insert : InsertMode.insertOrReplace,
             );
-        if (merge) {
-          personIdMap[row['id'] as int] = newId;
-          if (oldAvatar != null) pendingAvatar[newId] = oldAvatar;
-        }
+        personIdMap[row['id'] as int] = newId;
+        if (oldAvatar != null) pendingAvatar[newId] = oldAvatar;
         stats = stats.copyWith(persons: stats.persons + 1);
       }
 
@@ -350,11 +369,12 @@ class BackupService {
               ),
               mode: merge ? InsertMode.insert : InsertMode.insertOrReplace,
             );
-        if (merge) mediaIdMap[row['id'] as int] = newId;
-        stats = stats.copyWith(media: stats.media + 1);
-      }
+        // 两种模式都要记录映射：清空模式保留原 ID（映射为恒等），
+        // merge 模式是新分配 ID。回填头像/封面时统一走这张表。
+        mediaIdMap[row['id'] as int] = newId;
+        stats = stats.copyWith(media: stats.media + 1);      }
 
-      // 回填头像 / 封面引用（merge 模式下媒体 ID 已重映射）
+      // 回填头像 / 封面引用（此时媒体表已插完，外键可满足）
       for (final entry in pendingAvatar.entries) {
         final newMediaId = mediaIdMap[entry.value];
         if (newMediaId == null) continue;
@@ -528,9 +548,12 @@ class BackupService {
       final path = await exportToFile(
           customName: '$autoBackupPrefix$timestamp');
       // 清理超出保留数的旧自动备份（手动备份不受影响）
+      // 注：这里是「先删备份文件再退栈」的循环，listBackups 已按时间倒序，
+      // 必须先删完再插入新记录，否则 autos 里刚写入的新备份会成为第 0 项。
       final autos = (await listBackups())
           .where((f) => p.basename(f.path).startsWith(autoBackupPrefix))
           .toList();
+      autos.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
       for (var i = keep; i < autos.length; i++) {
         try {
           await autos[i].delete();

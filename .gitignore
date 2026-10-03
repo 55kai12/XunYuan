@@ -30,6 +30,9 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+# flutter_tool 的本地状态缓存（含绝对路径与构建指纹，不入库）
+.flutter
+.flutter_tool_state
 
 # Symbolication related
 app.*.symbols
@@ -61,3 +64,4 @@ local.properties
 
 # 内部审查与工作文档（不进入公开仓库）
 /寻渊-代码检查报告.md
+/寻渊-代码检查报告-*.md

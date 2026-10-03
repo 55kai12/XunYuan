@@ -489,4 +489,33 @@ const Map<String, String> enStrings = {
   '验证成功': 'Verified',
   '验证指纹或面容': 'Verify with fingerprint or face',
   '验证次数过多，请稍后重试': 'Too many verification attempts. Please try again later.',
+  '导出': 'Export',
+  '导出中心': 'Export Center',
+  '导出族谱树图片、家族名册、备份与 GEDCOM':
+      'Export family tree images, family rosters, backups and GEDCOM',
+  '导出选项': 'Export Options',
+  '导出内容与当前视图一致（跟随「只看直系」开关）。':
+      'Export matches the current view (follows the "Direct line only" toggle).',
+  '格式': 'Format',
+  '清晰度': 'Resolution',
+  '标准': 'Standard',
+  '高清': 'High',
+  '超清': 'Ultra',
+  '两者': 'Both',
+  '图片与文档': 'Images & Documents',
+  '数据文件': 'Data Files',
+  '族谱树图片': 'Family Tree Image',
+  '家族名册 PDF': 'Family Roster PDF',
+  '数据备份包': 'Data Backup Package',
+  'GEDCOM 文件': 'GEDCOM File',
+  '选定中心人物，导出 PNG / PDF': 'Pick a center person, export PNG / PDF',
+  '封面 + 家族信息 + 按世代分列的成员名册':
+      'Cover + family info + member roster grouped by generation',
+  '导出全部数据（含事件配图与头像）':
+      'Export all data (including event images and avatars)',
+  '导出可被其他族谱软件识别的 .ged 文件':
+      'Export a .ged file readable by other genealogy software',
+  '是否分享导出文件？': 'Share exported files?',
+  '是否分享家族名册 PDF？': 'Share family roster PDF?',
+  '寻渊 · 家族名册': 'Xunyuan · Family Roster',
 };

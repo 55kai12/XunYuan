@@ -23,6 +23,14 @@ final watchRelationshipsProvider =
       .watchRelationshipsForPerson(personId);
 });
 
+/// 监听某家族的全部关系（亲属称谓推导用）
+final watchRelationshipsByTreeProvider =
+    StreamProvider.autoDispose.family<List<Relationship>, int>((ref, treeId) {
+  return ref
+      .watch(relationshipRepositoryProvider)
+      .watchRelationshipsByTree(treeId);
+});
+
 /// 获取某人的子女（Future）
 final childrenProvider =
     FutureProvider.autoDispose.family<List<Person>, int>((ref, personId) {
@@ -48,8 +56,9 @@ final siblingsProvider =
 });
 
 /// 构建后代族谱树（Future）
+/// 根成员已不存在时为 null，调用方需处理（不要直接 `!`）
 final descendantTreeProvider =
-    FutureProvider.autoDispose.family<TreeNode, int>((ref, personId) {
+    FutureProvider.autoDispose.family<TreeNode?, int>((ref, personId) {
   return ref
       .watch(relationshipRepositoryProvider)
       .buildDescendantTree(rootPersonId: personId);

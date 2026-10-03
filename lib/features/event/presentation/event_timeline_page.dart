@@ -415,6 +415,11 @@ class _EventCard extends ConsumerWidget {
                       // 关联成员
                       personAsync.maybeWhen(
                         data: (person) {
+                          // 家族级事件本就不关联具体成员，
+                          // 不能显示成「成员已删除」
+                          if (event.personId == null) {
+                            return const SizedBox.shrink();
+                          }
                           if (person == null) {
                             return Text('成员已删除'.tr,
                                 style: const TextStyle(
@@ -614,6 +619,8 @@ class _EventDetailSheet extends ConsumerWidget {
           // 关联成员
           personAsync.maybeWhen(
             data: (person) {
+              // 家族级事件没有关联成员，不显示「关联成员」行
+              if (event.personId == null) return const SizedBox.shrink();
               if (person == null) {
                 return _DetailRow(label: '关联成员'.tr, value: '已删除'.tr);
               }

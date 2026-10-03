@@ -3,6 +3,7 @@
 /// 支持新增与编辑两种模式，表单校验 + 日期选择器 + 头像选择
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -308,6 +309,9 @@ class _PersonEditPageState extends ConsumerState<PersonEditPage> {
         );
         if (!mounted) return;
         if (success) {
+          // 保存成功，此时正文里已不再引用的配图可以安全删盘。
+          // 不 await：删盘结果不影响界面，避免在 context 使用前插入异步间隙。
+          unawaited(_biographyController.commitPendingDeletions());
           // 换了头像：旧头像媒体记录和文件已无引用，清理掉
           final oldAvatarId = _originalAvatarMediaId;
           if (oldAvatarId != null && oldAvatarId != _avatarMediaId) {

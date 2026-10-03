@@ -47,15 +47,20 @@ android {
         }
     }
 
-    // 按 ABI 拆分 APK，减小体积
-    splits {
-        abi {
-            enable true
-            reset()
-            include "armeabi-v7a", "arm64-v8a", "x86_64"
-            universalApk true // 同时生成通用 APK
-        }
-    }
+    // 这里**不要**手写 splits.abi。Flutter 的 Gradle 插件会自己配（enable / reset /
+    // universalApk(false) / 按 --target-platform include），而且多做一件手写拿不到的事：
+    //   output.versionCodeOverride = abiVersionCode * 1000 + variant.versionCode
+    // 即给每个 ABI 包算不同的 versionCode。手写块拿不到这条，两个包 versionCode 相同，
+    // 交替安装会撞版本号。这些只在传了 --split-per-abi 时才生效。
+    //
+    // 构建命令（README「开发」一节同步）：
+    //   flutter build apk --release --split-per-abi --target-platform android-arm64,android-arm
+    //
+    // --target-platform 决定编哪几个架构的 libapp.so / libflutter.so：
+    //   android-arm64 = arm64-v8a（现役机型）
+    //   android-arm   = armeabi-v7a（32 位老机）
+    // 不给 android-x64 就不会白编一份只有模拟器用的引擎。
+    // 若只给 arm64 而拆分仍开着，v7a 那个 split 会缺引擎 —— 是装不上的废包。
 
     buildTypes {
         release {

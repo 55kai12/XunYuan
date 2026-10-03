@@ -84,8 +84,12 @@ class EventRepository {
   }
 
   /// 更新事件
+  ///
+  /// [personId] 为 null 表示「不改动关联成员」。编辑页的关联成员下拉在编辑态
+  /// 是可改的，早先这里没有这个参数 ⇒ 用户改了成员、界面提示已保存，实际却没落库。
   Future<bool> update({
     required int id,
+    int? personId,
     EventType? type,
     String? title,
     DateTime? date,
@@ -96,6 +100,7 @@ class EventRepository {
           ..where((tbl) => tbl.id.equals(id)))
         .write(
       EventsCompanion(
+        personId: personId != null ? Value(personId) : const Value.absent(),
         type: type != null ? Value(type) : const Value.absent(),
         title: title != null ? Value(title) : const Value.absent(),
         date: Value(date),

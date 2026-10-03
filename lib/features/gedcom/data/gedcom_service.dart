@@ -261,11 +261,21 @@ class GedcomService {
     required RelationType type,
     String? note,
   }) async {
+    // 去重：有向关系按 (from, to) 判定；配偶/兄弟姐妹无向，
+    // 反向已存在同样视为重复（GEDCOM 里 HUSB/WIFE 顺序不固定，
+    // 同一对夫妻可能被两个 FAM 记录各写一次）。
+    final undirected = type == RelationType.spouse ||
+        type == RelationType.sibling;
     final existing = await (_db.select(_db.relationships)
-          ..where((t) =>
-              t.fromPersonId.equals(fromPersonId) &
-              t.toPersonId.equals(toPersonId) &
-              t.type.equals(type.name)))
+          ..where((t) => undirected
+              ? (t.type.equals(type.name) &
+                  ((t.fromPersonId.equals(fromPersonId) &
+                          t.toPersonId.equals(toPersonId)) |
+                      (t.fromPersonId.equals(toPersonId) &
+                          t.toPersonId.equals(fromPersonId))))
+              : (t.fromPersonId.equals(fromPersonId) &
+                  t.toPersonId.equals(toPersonId) &
+                  t.type.equals(type.name))))
         .getSingleOrNull();
     if (existing != null) return;
     await _db.into(_db.relationships).insert(
@@ -409,20 +419,69 @@ class GedcomService {
         <({String xref, int? husbandId, int? wifeId, Set<int> childIds, String? note, DateTime? startDate})>[];
 
     // 1) 配偶家庭：编号 F1..Fn 与 spouseRels 顺序一一对应
+    //
+    // 子女归属：一个人若有多段配偶关系，旧实现把「该人所有子女」塞进每一段
+    // 婚姻的 CHIL，导致同一个孩子在每位配偶名下都出现一次（导入端会重复建
+    // 家庭）。要按「子女的另一位父母是谁」来分配：
+    //   - 找出每个子女的**另一父母**（除本婚配对象外的父母）；
+    //   - 子女只在「另一父母 == 本家庭的配偶」时归入该 FAM；
+    //   - 找不到另一位父母（单亲，或父母关系缺失）时，为避免丢数据，
+    //     归入该人的**第一段**配偶关系，其余婚姻不再重复。
+    final parentCandidatesByChild = <int, Set<int>>{};
+    for (final r in relationships.where((r) => isParentType(r.type))) {
+      parentCandidatesByChild.putIfAbsent(r.toPersonId, () => {}).add(r.fromPersonId);
+    }
+
+    // 先算出每个人「第一段配偶关系」的下标，供无另一位父母时兜底
+    final firstFamIdxBySpouse = <int, int>{};
+    for (var i = 0; i < spouseRels.length; i++) {
+      firstFamIdxBySpouse.putIfAbsent(spouseRels[i].fromPersonId, () => i);
+      firstFamIdxBySpouse.putIfAbsent(spouseRels[i].toPersonId, () => i);
+    }
+
+    // childId -> 归属的 FAM 下标
+    final famIdxByChild = <int, int>{};
     for (var i = 0; i < spouseRels.length; i++) {
       final rel = spouseRels[i];
-      final childIds = relationships
-          .where((r) =>
-              isParentType(r.type) &&
-              (r.fromPersonId == rel.fromPersonId ||
-                  r.fromPersonId == rel.toPersonId))
-          .map((r) => r.toPersonId)
-          .toSet();
+      final couple = {rel.fromPersonId, rel.toPersonId};
+      for (final childId in parentCandidatesByChild.keys) {
+        if (famIdxByChild.containsKey(childId)) continue;
+        if (!parentCandidatesByChild[childId]!.any(couple.contains)) continue;
+        final others = parentCandidatesByChild[childId]!.difference(couple);
+        // 另一位父母在本家庭 → 明确归入本家庭
+        if (others.length == couple.length - 1) {
+          famIdxByChild[childId] = i;
+        }
+      }
+    }
+
+    final childIdsByFam = <int, Set<int>>{};
+    for (final entry in parentCandidatesByChild.entries) {
+      final childId = entry.key;
+      final parents = entry.value;
+      var idx = famIdxByChild[childId];
+      if (idx == null) {
+        // 兜底：没有能匹配到「另一位父母」的婚配，归入第一位父母的第一段婚姻
+        for (final p in parents) {
+          final f = firstFamIdxBySpouse[p];
+          if (f != null) {
+            idx = f;
+            break;
+          }
+        }
+      }
+      if (idx != null) {
+        childIdsByFam.putIfAbsent(idx, () => {}).add(childId);
+      }
+    }
+
+    for (var i = 0; i < spouseRels.length; i++) {
+      final rel = spouseRels[i];
       famRecords.add((
         xref: 'F${i + 1}',
         husbandId: rel.fromPersonId,
         wifeId: rel.toPersonId,
-        childIds: childIds,
+        childIds: childIdsByFam[i] ?? <int>{},
         note: rel.note,
         startDate: rel.startDate,
       ));

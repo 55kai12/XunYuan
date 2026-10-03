@@ -480,8 +480,10 @@ class _PersonEventsSection extends ConsumerWidget {
                     ),
                     const Spacer(),
                     TextButton.icon(
+                      // 用 push 而非 go：go 会替换整个导航栈，保存后返回就退出了
+                      // 详情页（本文件其它入口也都是 push）
                       onPressed: () => context
-                          .go('/event/new?personId=$personId'),
+                          .push('/event/new?personId=$personId'),
                       icon: const Icon(Icons.add, size: 18),
                       label: Text('添加'.tr),
                     ),
@@ -707,6 +709,44 @@ class _RelationsSection extends ConsumerWidget {
     final spousesAsync = ref.watch(spousesProvider(personId));
     final childrenAsync = ref.watch(childrenProvider(personId));
     final siblingsAsync = ref.watch(siblingsProvider(personId));
+
+    // 查询出错时不能静默显示「暂无关系记录」——那会让用户以为数据丢了。
+    // valueOrNull 在 error 时返回 null，所以必须先查 hasError。
+    final firstError = [parentsAsync, spousesAsync, childrenAsync, siblingsAsync]
+        .where((a) => a.hasError)
+        .map((a) => a.error)
+        .firstOrNull;
+    if (firstError != null) {
+      return _Section(
+        title: '家族关系'.tr,
+        icon: Icons.family_restroom,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              '关系记录加载失败：$firstError'.tr,
+              style: const TextStyle(color: AppColors.error, fontSize: 13),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // 还在加载时不显示「暂无」结论，避免先闪一下空态
+    final stillLoading = [parentsAsync, spousesAsync, childrenAsync, siblingsAsync]
+        .any((a) => a.isLoading);
+    if (stillLoading) {
+      return _Section(
+        title: '家族关系'.tr,
+        icon: Icons.family_restroom,
+        children: const [
+          Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+          ),
+        ],
+      );
+    }
 
     // 所有关系都为空时不显示
     final hasAny = (parentsAsync.valueOrNull?.isNotEmpty ?? false) ||

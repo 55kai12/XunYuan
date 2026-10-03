@@ -37,12 +37,23 @@ class RelationshipRepository {
       throw RelationshipException(cycleError);
     }
 
-    // 重复检测：同一对人同一类型不重复创建
+    // 重复检测：同一对人同一类型不重复创建。
+    // 父子/母子这类有向关系按 (from, to) 判定；配偶/兄弟姐妹是无向关系，
+    // 反向插入（B→A）与正向（A→B）语义等价，必须一并拦住 ——
+    // 否则 getSpouses 会对同一个人返回两条记录，族谱树里同一个
+    // ValueKey 在一行内重复出现，直接红屏。
+    final undirected = type == RelationType.spouse ||
+        type == RelationType.sibling;
     final existing = await (_db.select(_db.relationships)
-          ..where((tbl) =>
-              tbl.fromPersonId.equals(fromPersonId) &
-              tbl.toPersonId.equals(toPersonId) &
-              tbl.type.equals(type.name)))
+          ..where((tbl) => undirected
+              ? (tbl.type.equals(type.name) &
+                  ((tbl.fromPersonId.equals(fromPersonId) &
+                          tbl.toPersonId.equals(toPersonId)) |
+                      (tbl.fromPersonId.equals(toPersonId) &
+                          tbl.toPersonId.equals(fromPersonId))))
+              : (tbl.fromPersonId.equals(fromPersonId) &
+                  tbl.toPersonId.equals(toPersonId) &
+                  tbl.type.equals(type.name))))
         .getSingleOrNull();
     if (existing != null) {
       throw RelationshipException('该关系已存在'.tr);
@@ -128,6 +139,13 @@ class RelationshipRepository {
         .watch();
   }
 
+  /// 监听某家族的全部关系（用于亲属称谓推导）
+  Stream<List<Relationship>> watchRelationshipsByTree(int treeId) {
+    return (_db.select(_db.relationships)
+          ..where((tbl) => tbl.treeId.equals(treeId)))
+        .watch();
+  }
+
   /// 获取某人的父亲（from=father, to=person）
   Future<Person?> getFather(int personId) async {
     return _getRelative(personId, RelationType.father, asTo: true);
@@ -166,9 +184,14 @@ class RelationshipRepository {
                   tbl.toPersonId.equals(personId))))
         .get();
     final result = <({Person person, Relationship rel})>[];
+    // 防御性去重：修复前的旧库可能已存在 A→B 与 B→A 两条配偶记录
+    // （insert 的重复检测当时只按有向判定），这里按对象 ID 去重，
+    // 避免上层把同一人渲染两次、同一个 ValueKey 在一行内重复。
+    final seen = <int>{};
     for (final r in rows) {
       final spouseId =
           r.fromPersonId == personId ? r.toPersonId : r.fromPersonId;
+      if (!seen.add(spouseId)) continue;
       final person = await (_db.select(_db.persons)
             ..where((tbl) => tbl.id.equals(spouseId)))
           .getSingleOrNull();
@@ -300,27 +323,32 @@ class RelationshipRepository {
   // ==================== 族谱树构建 ====================
 
   /// 以 [rootPersonId] 为根构建后代树（含配偶）
-  /// 返回树的根节点，maxDepth 限制最大深度防止无限递归
-  Future<TreeNode> buildDescendantTree({
+  /// 返回树的根节点；根成员已不存在（被删）时返回 null。
+  /// maxDepth 限制最大深度防止无限递归。
+  Future<TreeNode?> buildDescendantTree({
     required int rootPersonId,
     int maxDepth = 20,
   }) async {
     final person = await _getPerson(rootPersonId);
+    // 根成员可能已被删除（例如把它设为中心人物后又删了人），
+    // 早先这里直接 `person!` ⇒ 空值崩溃。
+    if (person == null) return null;
     final spouses = await getSpouses(rootPersonId);
     final children = await getChildren(rootPersonId);
 
     final childNodes = <TreeNode>[];
     if (maxDepth > 0) {
       for (final child in children) {
-        childNodes.add(await buildDescendantTree(
+        final node = await buildDescendantTree(
           rootPersonId: child.id,
           maxDepth: maxDepth - 1,
-        ));
+        );
+        if (node != null) childNodes.add(node);
       }
     }
 
     return TreeNode(
-      person: person!,
+      person: person,
       spouses: spouses.map((s) => s.person).toList(),
       children: childNodes,
     );

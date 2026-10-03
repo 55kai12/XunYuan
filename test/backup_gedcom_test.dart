@@ -146,8 +146,52 @@ void main() {
       expect(segs.where((s) => s.isImage), hasLength(1));
     });
 
-    test('v1 纯 JSON 备份仍可恢复（向后兼容）', () async {
+    // 回归：清空模式恢复带头像/封面的备份曾抛
+    // SqliteException(787) FOREIGN KEY constraint failed ——
+    // 成员表先于媒体表插入，直接写旧 avatarMediaId 时媒体记录已被删光。
+    test('清空模式恢复带头像与封面的备份不触发外键失败', () async {
       await seedData();
+      await seedMediaFiles();
+
+      // 造一条媒体记录并把它挂到成员头像 + 家族封面上
+      final treeId = (await db.select(db.familyTrees).getSingle()).id;
+      final personId = (await db.select(db.persons).get()).first.id;
+      final mediaId = await db.into(db.mediaTable).insert(
+            MediaTableCompanion.insert(
+              treeId: Value(treeId),
+              personId: Value(personId),
+              type: MediaKind.image,
+              path: 'avatars/avatar_test.jpg',
+              createdAt: DateTime.now(),
+            ),
+          );
+      await (db.update(db.persons)..where((t) => t.id.equals(personId)))
+          .write(PersonsCompanion(avatarMediaId: Value(mediaId)));
+      await (db.update(db.familyTrees)..where((t) => t.id.equals(treeId)))
+          .write(FamilyTreesCompanion(coverMediaId: Value(mediaId)));
+
+      final zipPath = await backupService.exportToFile(customName: 'fk');
+      expect(File(zipPath).existsSync(), isTrue);
+
+      // 清空模式恢复（merge: false）——修复前此处抛外键约束失败
+      final stats = await backupService.importFromFile(zipPath, merge: false);
+      expect(stats.persons, 2);
+      expect(stats.media, greaterThanOrEqualTo(1));
+
+      // 头像 / 封面引用被正确回填，不是悬空 null
+      final restoredPerson =
+          (await db.select(db.persons).get()).firstWhere((p) => p.id == personId);
+      expect(restoredPerson.avatarMediaId, isNotNull);
+      final restoredTree = await db.select(db.familyTrees).getSingle();
+      expect(restoredTree.coverMediaId, isNotNull);
+      // 回填后的 ID 必须真实存在于媒体表（外键语义）
+      final mediaIds =
+          (await db.select(db.mediaTable).get()).map((m) => m.id).toSet();
+      expect(mediaIds, contains(restoredPerson.avatarMediaId));
+      expect(mediaIds, contains(restoredTree.coverMediaId));
+    });
+
+    test('v1 纯 JSON 备份仍可恢复（向后兼容）', () async {      await seedData();
 
       // 用 exportToJson 造一份旧式 JSON 文件
       final json = await backupService.exportToJson();
@@ -185,6 +229,40 @@ void main() {
       // 手动备份不受影响
       expect(all.any((f) => p.basename(f.path).startsWith('manual_one')),
           isTrue);
+    });
+
+    test('备份写入是原子的：不留 .tmp 残留，且同名单文件可被覆盖重写', () async {
+      await seedData();
+
+      // 同一 customName 连续导出两次：第二次必须覆盖成功（Windows 上
+      // rename 到已存在目标会失败，实现里已先删旧文件）
+      final first = await backupService.exportToFile(customName: 'same_name');
+      expect(File(first).existsSync(), isTrue);
+      final second = await backupService.exportToFile(customName: 'same_name');
+      expect(second, first);
+      expect(File(second).existsSync(), isTrue);
+      // 覆盖后仍是可解析的完整 zip
+      final stats = await backupService.importFromFile(second, merge: false);
+      expect(stats.families, 1);
+
+      // 正常路径下不残留临时文件
+      final backupDir = Directory(p.join(docsDir.path, 'backups'));
+      final leftovers = backupDir
+          .listSync()
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.tmp'))
+          .toList();
+      expect(leftovers, isEmpty, reason: '不应残留 .tmp 文件：$leftovers');
+
+      // 手动塞一个历史残留的 .tmp，listBackups 应顺手清掉且不把它当备份列出
+      File(p.join(backupDir.path, 'stale.zip.tmp')).writeAsStringSync('half');
+      final listed = await backupService.listBackups();
+      expect(listed.any((f) => f.path.endsWith('.tmp')), isFalse);
+      expect(
+        backupDir.listSync().whereType<File>().any((f) => f.path.endsWith('.tmp')),
+        isFalse,
+        reason: 'listBackups 应清理历史 .tmp 残留',
+      );
     });
   });
 
@@ -236,6 +314,71 @@ void main() {
       final gedcom = await gedcomService.exportToGedcom(treeId);
       // 出生事件类型不会被导出为 EVEN（EVEN 只承载自定义事件）
       expect(gedcom, isNot(contains('2 TYPE 出生')));
+    });
+
+    test('多配偶时同一子女不会出现在每段婚姻的 CHIL（按另一位父母归属）', () async {
+      final treeId = await db.into(db.familyTrees).insert(
+            FamilyTreesCompanion.insert(
+              name: '测试家族',
+              surname: '张',
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+          );
+      Future<int> addPerson(String given, Gender g) => db
+          .into(db.persons)
+          .insert(PersonsCompanion.insert(
+            treeId: treeId,
+            surname: '张',
+            givenName: given,
+            gender: g,
+          ));
+      final father = await addPerson('父', Gender.male);
+      final wife1 = await addPerson('妻一', Gender.female);
+      final wife2 = await addPerson('妻二', Gender.female);
+      final child1 = await addPerson('子一', Gender.male);
+      final child2 = await addPerson('子二', Gender.male);
+
+      Future<void> relate(int from, int to, RelationType t) =>
+          db.into(db.relationships).insert(RelationshipsCompanion.insert(
+                treeId: treeId,
+                fromPersonId: from,
+                toPersonId: to,
+                type: t,
+              ));
+      // 父与两位配偶
+      await relate(father, wife1, RelationType.spouse);
+      await relate(father, wife2, RelationType.spouse);
+      // 子一 ← 父+妻一；子二 ← 父+妻二
+      await relate(father, child1, RelationType.father);
+      await relate(wife1, child1, RelationType.mother);
+      await relate(father, child2, RelationType.father);
+      await relate(wife2, child2, RelationType.mother);
+
+      final gedcom = await gedcomService.exportToGedcom(treeId);
+
+      // 两个孩子各只能有一条 CHIL（旧实现会各出现 2 次，因为两段婚姻都收)
+      final chilLines =
+          gedcom.split('\n').where((l) => l.startsWith('1 CHIL ')).toList();
+      expect(chilLines, hasLength(2), reason: '两个孩子各只应出现一次，实际：$chilLines');
+      expect(chilLines.toSet(), hasLength(2));
+
+      // 按 FAM 段切分：两段婚姻各分到恰好 1 个孩子
+      final famBlocks = gedcom.split('0 @F').skip(1).toList();
+      final perFamChildren = <String, int>{};
+      for (final block in famBlocks) {
+        final xref = block.split(' ').first;
+        final n =
+            block.split('\n').where((l) => l.startsWith('1 CHIL ')).length;
+        if (n > 0) perFamChildren[xref] = n;
+      }
+      expect(perFamChildren.length, 2);
+      expect(perFamChildren.values, everyElement(1),
+          reason: '每段婚姻只应分到 1 个孩子，实际：$perFamChildren');
+
+      // 两位配偶都出现在导出里
+      expect(gedcom, contains('1 WIFE @I$wife1@'));
+      expect(gedcom, contains('1 WIFE @I$wife2@'));
     });
   });
 }

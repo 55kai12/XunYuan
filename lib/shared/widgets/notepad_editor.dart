@@ -52,6 +52,15 @@ class NotepadController extends ChangeNotifier {
   /// 已销毁标记：异步清理完成后不再回调监听者（避免 setState after dispose）
   bool _disposed = false;
 
+  /// 待删除的图片文件名。
+  /// 删图只入队、不立刻动磁盘 —— 用户可能删完又点「取消」，
+  /// 立刻删文件会把仍被已保存内容引用的图弄丢。
+  /// 真正删除发生在 [commitPendingDeletions]（保存成功后）。
+  final Set<String> _pendingDeletions = {};
+
+  /// 当前待删除的图片文件名（只读，供测试与调试查看）
+  Set<String> get pendingDeletions => Set.unmodifiable(_pendingDeletions);
+
   /// 当前内容块序列（供编辑器渲染）
   List<NotepadBlock> get blocks => List.unmodifiable(_blocks);
 
@@ -66,6 +75,8 @@ class NotepadController extends ChangeNotifier {
 
   /// 重新载入内容（编辑已有简介时调用）
   void load(String? initial) {
+    // 换了一条记录，之前登记的待删文件与本条无关，丢弃登记（不动盘）。
+    _pendingDeletions.clear();
     for (final b in _blocks) {
       _detach(b);
       b.release();
@@ -128,10 +139,15 @@ class NotepadController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 删除图片块：移除块并删除磁盘文件，相邻文本块自动合并
+  /// 删除图片块：移除块并登记待删文件，相邻文本块自动合并。
+  ///
+  /// 注意这里是**惰性删除**：磁盘文件不在此刻删除，只记入
+  /// [_pendingDeletions]，等保存成功后由 [commitPendingDeletions] 落地。
+  /// 这样「删图 → 取消」不会损坏仍被保存内容引用的图片。
   Future<void> removeImage(NotepadBlock block) async {
     final index = _blocks.indexOf(block);
     if (index < 0) return;
+    final fileName = block.imageFile;
     final prev = index > 0 && !_blocks[index - 1].isImage
         ? _blocks[index - 1]
         : null;
@@ -155,14 +171,32 @@ class NotepadController extends ChangeNotifier {
       }
     }
 
-    try {
-      final f = File(await EventImageStore.filePath(block.imageFile!));
-      if (await f.exists()) await f.delete();
-    } catch (_) {
-      // 文件删除失败不阻塞界面更新
-    }
+    // 只登记，不删盘。保存成功后才真正落地。
+    if (fileName != null) _pendingDeletions.add(fileName);
+
     if (_disposed) return;
     notifyListeners();
+  }
+
+  /// 保存成功后调用：真正删除已登记移除的图片文件。
+  /// 失败静默 —— 多留一个孤儿文件远好于报错打断保存流程。
+  Future<void> commitPendingDeletions() async {
+    if (_pendingDeletions.isEmpty) return;
+    final names = List<String>.from(_pendingDeletions);
+    _pendingDeletions.clear();
+    for (final name in names) {
+      try {
+        final f = File(await EventImageStore.filePath(name));
+        if (await f.exists()) await f.delete();
+      } catch (_) {
+        // 文件删除失败不影响已完成的保存
+      }
+    }
+  }
+
+  /// 放弃待删除登记（保存失败 / 用户取消时调用），磁盘文件保持不动。
+  void discardPendingDeletions() {
+    _pendingDeletions.clear();
   }
 
   @override

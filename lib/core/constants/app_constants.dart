@@ -27,10 +27,10 @@ class AppConstants {
   static const String backupExtension = '.xunyuan.json';
 
   /// 当前版本
-  static const String version = '0.3.36';
+  static const String version = '0.3.50';
 
   /// 构建号
-  static const String buildNumber = '48';
+  static const String buildNumber = '62';
 }
 
 /// 路由路径常量

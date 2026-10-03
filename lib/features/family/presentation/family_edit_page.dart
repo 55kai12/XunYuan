@@ -3,6 +3,8 @@
 /// 支持新增与编辑两种模式，表单校验 + 友好错误提示
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -158,6 +160,9 @@ class _FamilyEditPageState extends ConsumerState<FamilyEditPage> {
         );
         if (!mounted) return;
         if (success) {
+          // 保存成功，此时正文里已不再引用的配图可以安全删盘。
+          // 不 await：删盘结果不影响界面，避免在 context 使用前插入异步间隙。
+          unawaited(_descriptionController.commitPendingDeletions());
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('家族信息已保存'.tr)),
           );

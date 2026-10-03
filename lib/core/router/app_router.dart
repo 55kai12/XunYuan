@@ -18,6 +18,7 @@ import '../../features/person/presentation/person_edit_page.dart';
 import '../../features/event/presentation/event_timeline_page.dart';
 import '../../features/event/presentation/event_edit_page.dart';
 import '../../features/backup/presentation/backup_page.dart';
+import '../../features/export/presentation/export_center_page.dart';
 import '../../features/profile/presentation/profile_page.dart';
 import '../../features/profile/presentation/about_page.dart';
 import '../../features/family/presentation/family_edit_page.dart';
@@ -178,6 +179,8 @@ GoRouter createRouter(bool onboardingDone) {
       pageBuilder: (context, state) => ExpressivePage(
         child: FamilyTreePage(
           rootPersonId: int.parse(state.pathParameters['id']!),
+          // 导出中心深链：带 export=1 进入即自动弹出导出选项
+          autoExport: state.uri.queryParameters['export'] == '1',
         ),
       ),
     ),
@@ -218,6 +221,16 @@ GoRouter createRouter(bool onboardingDone) {
       name: 'backup',
       pageBuilder: (context, state) => const ExpressivePage(
         child: BackupPage(),
+      ),
+    ),
+
+    // ===== 导出路由 =====
+    // 导出中心页（全屏）
+    GoRoute(
+      path: '/export',
+      name: 'export',
+      pageBuilder: (context, state) => const ExpressivePage(
+        child: ExportCenterPage(),
       ),
     ),
 

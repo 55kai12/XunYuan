@@ -170,7 +170,7 @@
 
 | 级别 | 检查项 | 标准 | 验证命令 |
 |------|--------|------|----------|
-| 严重 | Release 构建 | `flutter build apk --release` 成功 | 构建命令 |
+| 严重 | Release 构建 | `flutter build apk --release --split-per-abi --target-platform android-arm64,android-arm` 成功 | 构建命令 |
 | 严重 | 签名验证 | APK 使用 release 密钥签名，apksigner verify 通过 | `apksigner verify` |
 | 严重 | 可安装 | APK 能安装到 Android 6.0+ 设备 | 手动安装 |
 | 严重 | 无崩溃 | 安装后冷启动、创建家族、添加成员、查看族谱树无崩溃 | 手动测试 |
@@ -178,21 +178,52 @@
 
 ### 6.2 APK 体积（一般）
 
-| 架构 | 目标体积 | 当前 |
+按 ABI 拆分交付，一个包只带本架构的 `libapp.so` / `libflutter.so`：
+
+| 架构 | 目标体积 | 当前（v0.3.47） |
 |------|----------|------|
-| arm64-v8a（主流） | < 25MB | 21.4MB ✅ |
-| 通用（含全部 ABI） | < 65MB | 59.4MB ✅ |
+| arm64-v8a（现役机型） | < 25MB | 23.97 MiB ✅ |
+| armeabi-v7a（32 位老机） | < 25MB | 22.14 MiB ✅ |
+
+对比旧「通用包」（26.93 MiB，versionCode 58）：每台设备少下载 3～4.8 MiB。
+通用包里那 3.1 MiB 是从不执行的 v7a / x86_64 / x86 版 sqlite3 —— 详见 CHANGELOG v0.3.47。
+
+体积大头是固定成本，优化空间有限：`libflutter.so` 10.22 MiB + `libapp.so` 9.31 MiB 已占
+arm64 包的 82%，其余是 sqlite3（1.46 MiB）与中文字体（1.08 MiB）。
 
 ### 6.3 发布检查清单（每次交付前）
 
 - [ ] `flutter analyze` 0 error / 0 warning
 - [ ] `flutter test` 全部通过
-- [ ] `flutter build apk --release` 成功
+- [ ] 数据完整性回归测试通过（见 6.4，这几条是已复现缺陷的最小复现，不得跳过）
+- [ ] `flutter build apk --release --split-per-abi --target-platform android-arm64,android-arm` 成功
 - [ ] APK 签名验证通过
 - [ ] 版本号已递增
 - [ ] 核心功能 F1-F8 手动冒烟测试通过
 - [ ] 深色模式切换正常
 - [ ] 无新增英文占位文字
+
+### 6.4 数据完整性回归闸门（强制）
+
+以下用例是**已在内存库上复现过的缺陷**的最小复现，每次交付前必须全绿。
+它们拦截的都是「静默丢数据 / 直接崩界面」级别的问题，靠肉眼测试很难发现：
+
+| # | 用例文件 | 拦截的缺陷 | 修复版本 |
+|---|----------|-----------|----------|
+| G1 | `test/backup_gedcom_test.dart`<br>「清空模式恢复带头像与封面的备份不触发外键失败」 | 清空模式恢复时：① 删 `media` 撞 `persons.avatarMediaId` 外键（FK 787）；② 插成员时写旧头像 ID 而媒体尚未插入 | v0.3.48 |
+| G2 | `test/relationship_dedup_test.dart` | 配偶/兄弟姐妹是**无向**关系却只按有向去重 → 反向重复插入成功 → `getSpouses` 返回同一人两条 → 族谱树同一行 `ValueKey` 重复直接红屏 | v0.3.48 |
+| G3 | `test/notepad_editor_test.dart`<br>「图片惰性删除」组 | 编辑器删图**立刻删盘**，用户删完点「取消」会弄丢仍被已保存内容引用的图片 | v0.3.48 |
+| G4 | `test/database_test.dart`<br>「更新事件可更换关联成员」 | `EventRepository.update()` 缺 `personId` 参数 → 编辑页换了关联成员却**静默不落库** | v0.3.49 |
+| G5 | `test/database_test.dart`<br>「根成员已删除时 buildDescendantTree 返回 null 而不是崩溃」 | `buildDescendantTree` 里 `person!` 硬断言 → 成员被删后仍设为中心人物即空值崩溃 | v0.3.49 |
+| G6 | `test/database_test.dart`<br>「删除成员级联删除其媒体记录与头像（不留孤儿文件）」 | `PersonRepository.delete()` 不清 media 表 → 成员已删但头像仍在家族相册里显示、磁盘文件不回收；且删 media 顺序错会撞 `persons.avatarMediaId` 外键 | v0.3.50 |
+| G7 | `test/backup_gedcom_test.dart`<br>「多配偶时同一子女不会出现在每段婚姻的 CHIL（按另一位父母归属）」 | GEDCOM 导出把同一子女塞进每段婚姻的 CHIL → 导入端重复建家庭 | v0.3.50 |
+| G8 | `test/backup_gedcom_test.dart`<br>「备份写入是原子的：不留 .tmp 残留，且同名单文件可被覆盖重写」 | 备份直接写最终文件名 → 中途崩溃留半截 zip，`listBackups` 仍当正常备份列出 | v0.3.50 |
+
+验证命令：
+
+```
+flutter test test/backup_gedcom_test.dart test/relationship_dedup_test.dart test/notepad_editor_test.dart test/database_test.dart
+```
 
 ---
 
@@ -203,10 +234,11 @@
 | 级别 | 检查项 | 标准 |
 |------|--------|------|
 | 严重 | 数据库 CRUD | 7 张表的增删改查有测试覆盖 |
-| 严重 | 关系逻辑 | 父子/配偶/子女关系查询有测试 |
-| 严重 | 备份恢复 | JSON 导出/导入往返一致性有测试 |
+| 严重 | 关系逻辑 | 父子/配偶/子女关系查询有测试；**无向关系反向去重**有测试（见 6.4 G2） |
+| 严重 | 备份恢复 | JSON 导出/导入往返一致性有测试；**清空模式带外键引用恢复**有测试（见 6.4 G1） |
 | 严重 | GEDCOM | GEDCOM 解析/导出有测试 |
 | 一般 | 搜索逻辑 | 多条件搜索有测试 |
+| 一般 | 编辑器 | 图文编辑器的删图**惰性删除**语义有测试（见 6.4 G3） |
 
 ### 7.2 Widget 测试（强制）
 

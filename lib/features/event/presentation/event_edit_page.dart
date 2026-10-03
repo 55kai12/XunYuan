@@ -3,6 +3,8 @@
 /// 支持从成员详情或时间线页进入
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -163,6 +165,8 @@ class _EventEditPageState extends ConsumerState<EventEditPage> {
           description: _trimOrNull(_descriptionController.text),
         );
         if (!mounted) return;
+        // 不 await：删盘结果不影响界面，避免在 context 使用前插入异步间隙
+        unawaited(_descriptionController.commitPendingDeletions());
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('事件添加成功'.tr)),
         );
@@ -170,6 +174,7 @@ class _EventEditPageState extends ConsumerState<EventEditPage> {
       } else {
         final success = await repo.update(
           id: widget.editId!,
+          personId: _selectedPersonId,
           type: _selectedType,
           title: _titleController.text.trim(),
           date: _eventDate,
@@ -178,6 +183,8 @@ class _EventEditPageState extends ConsumerState<EventEditPage> {
         );
         if (!mounted) return;
         if (success) {
+          // 保存成功，此时描述里已不再引用的配图可以安全删盘
+          unawaited(_descriptionController.commitPendingDeletions());
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('事件已保存'.tr)),
           );

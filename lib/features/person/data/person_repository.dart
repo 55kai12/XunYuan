@@ -264,6 +264,34 @@ class PersonRepository {
       if (person != null) {
         await EventImageStore.deleteFiles(person.biography);
       }
+      // 清理该成员的媒体（头像等）：先删磁盘文件再删记录，避免相册里残留
+      // 已删成员的头像。
+      //
+      // 顺序要点：persons.avatarMediaId 有外键指向 media（database.dart:143），
+      // 所以要先把引用方（persons 行）的 avatarMediaId 置空，才能删 media 行。
+      // 这一步必须在删 persons 之前做 —— 否则删 media 时会撞 FK 约束。
+      final avatarMediaId = person?.avatarMediaId;
+      if (person != null && avatarMediaId != null) {
+        await (_db.update(_db.persons)
+              ..where((tbl) => tbl.id.equals(personId)))
+            .write(const PersonsCompanion(avatarMediaId: Value(null)));
+      }
+      // 头像归该成员所有；另把 personId 直接指向他的媒体一并清掉。
+      final mediaRows = await (_db.select(_db.mediaTable)
+            ..where((tbl) => avatarMediaId != null
+                ? tbl.personId.equals(personId) | tbl.id.equals(avatarMediaId)
+                : tbl.personId.equals(personId)))
+          .get();
+      for (final m in mediaRows) {
+        try {
+          final f = File(m.path);
+          if (await f.exists()) await f.delete();
+        } catch (_) {
+          // 文件删除失败不阻塞数据库删除
+        }
+        await (_db.delete(_db.mediaTable)..where((tbl) => tbl.id.equals(m.id)))
+            .go();
+      }
       // 删除涉及该成员的所有关系
       await (_db.delete(_db.relationships)
             ..where((tbl) =>

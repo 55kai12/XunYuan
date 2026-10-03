@@ -39,6 +39,12 @@ class ProfilePage extends ConsumerWidget {
             onTap: () => context.push('/gallery'),
           ),
           _buildMenuItem(
+            icon: Icons.ios_share,
+            title: '导出中心'.tr,
+            subtitle: '导出族谱树图片、家族名册、备份与 GEDCOM'.tr,
+            onTap: () => context.push('/export'),
+          ),
+          _buildMenuItem(
             icon: Icons.backup_outlined,
             title: '备份与恢复'.tr,
             subtitle: '导出 JSON 备份，从备份恢复'.tr,
