@@ -68,3 +68,6 @@ local.properties
 
 # gh CLI 等在仓库内落下的本机状态（device-id 等）
 /.local/
+
+# golden 截图比对失败时自动落盘的差异图（仅本机调试用）
+/test/failures/

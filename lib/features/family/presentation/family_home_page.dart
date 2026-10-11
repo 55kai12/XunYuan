@@ -221,6 +221,8 @@ class _FamilyHomeContent extends ConsumerWidget {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        // 主题给 FAB 设了 CircleBorder，extended 会被压成圆形裁掉文字
+        shape: const StadiumBorder(),
         onPressed: () => context.push('/person/new?treeId=${family.id}'),
         icon: const Icon(Icons.person_add),
         label: Text('添加成员'.tr),

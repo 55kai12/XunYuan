@@ -456,14 +456,19 @@ Future<void> _pumpApp(WidgetTester tester, AppDatabase db) async {
 /// 注意：`pump(800ms)` **一次跑不完动画**。Ticker 的第一次 tick 只用来记录基准
 /// 时间（elapsed = 0），要再来一帧才会真正前进。所以「切换称谓」这类过渡在旧写法
 /// 下会停在第一帧——旧称谓还在、新称谓还没淡进来，截图就会拍到过渡瞬间。
-/// 多补一帧才叫真 settle。
+///
+/// 更隐蔽的是 [StaggerIn]：它用 `Future.delayed(30ms × index)` 延迟启动 controller，
+/// 那个定时器要等一次 elapse 才触发，于是「触发的那一帧」又成了新的基准帧。
+/// 只补两帧时错峰项会停在 opacity 0 —— 家族首页截图曾因此整页空白（列表布局正常、
+/// 只是全透明）。这里统一多补几帧，覆盖掉「错峰延迟 + 动画时长」。
 Future<void> _settle(WidgetTester tester, {int ms = 500}) async {
   await tester.runAsync(() async {
     await Future<void>.delayed(Duration(milliseconds: ms));
   });
   await tester.pump();
-  await tester.pump(const Duration(milliseconds: 800));
-  await tester.pump(const Duration(milliseconds: 800));
+  for (var i = 0; i < 4; i++) {
+    await tester.pump(const Duration(milliseconds: 600));
+  }
 }
 
 /// 用路由跳转（比点击更稳，不受具体控件与动画影响）
